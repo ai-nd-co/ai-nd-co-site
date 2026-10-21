@@ -1,0 +1,104 @@
+name: Publish image to GHCR
+
+# Builds ghcr.io/ai-nd-co/ai-nd-co-site (deploy/Dockerfile) and prints its digest for pinning in
+# ai-nd-co/k3s-gpu-cluster, which serves ai-nd.co from the office cluster. It deploys nothing: a new
+# page goes live when that digest is pinned there in a reviewed PR.
+#
+# GitHub-hosted runner on purpose: this repository is public, and fork pull requests must never reach
+# the office cluster's self-hosted runners. Fork PRs do not build at all (the `if` below), and a
+# same-repo PR builds a `pr-<sha>` tag that can be tried on the cluster before it reaches main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-image-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'ai-nd-co/ai-nd-co-site' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE: ghcr.io/ai-nd-co/ai-nd-co-site
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Build the branch head, not GitHub's synthetic merge commit, so the tag names a real commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) prefix=pr ;;
+            *)
+              [ "$GITHUB_REF" = "refs/heads/main" ] || { printf 'Ref %q is not publishable (only main).\n' "$GITHUB_REF" >&2; exit 1; }
+              prefix=main ;;
+          esac
+          echo "tag=${prefix}-$(git rev-parse HEAD | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker build \
+            --platform linux/amd64 \
+            -f deploy/Dockerfile \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
+            -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+
+      - name: Smoke test
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The cluster runs it as uid 101 with a read-only root and a writable /tmp; test it the same way.
+          docker run -d --name site --read-only --tmpfs /tmp --user 101:101 -p 8080:8080 "$IMAGE:$TAG"
+          trap 'docker logs site; docker rm -f site >/dev/null' EXIT
+          for i in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:8080/ && break; sleep 0.5; done
+          for p in / /privacy /terms /privacy.html /terms.html /assets/style.css /assets/favicon.png; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$p")"
+            echo "$p -> $code"
+            [ "$code" = 200 ] || exit 1
+          done
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/README.md)"
+          echo "/README.md -> $code"; [ "$code" = 404 ] || exit 1
+
+      - name: Report the digest to pin
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE:$TAG")"
+          pushed="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$TAG" | grep "^$IMAGE@" | head -1 | cut -d@ -f2)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "registry digest is malformed: '$digest'" >&2; exit 1; }
+          [ "$digest" = "$pushed" ] || { echo "registry says $digest but the push recorded '$pushed'" >&2; exit 1; }
+          echo "PIN $IMAGE@$digest"
+          {
+            echo "Built \`$TAG\` from \`$(git rev-parse HEAD)\`. Pin in k3s-gpu-cluster:"
+            echo '```'
+            echo "$IMAGE@$digest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
