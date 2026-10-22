@@ -80,7 +80,21 @@ section.block { padding: 56px 0; }
 .section-head p { color: var(--muted); }
 
 .cards { display: grid; gap: 16px; }
-@media (min-width: 760px) { .cards { grid-template-columns: repeat(3, 1fr); gap: 20px; } }
+@media (min-width: 760px) { .cards { grid-template-columns: repeat(2, 1fr); gap: 20px; } }
+.cards.products { gap: 20px; }
+.product { display: flex; flex-direction: column; gap: 14px; padding: 28px; transition: transform .15s ease, box-shadow .15s ease; }
+.product:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(20,32,74,.06), 0 14px 32px rgba(20,32,74,.10); }
+.product .card-head { display: flex; align-items: center; gap: 14px; }
+.product .icon { margin: 0; width: 52px; height: 52px; flex: none; }
+.product .icon svg { width: 26px; height: 26px; }
+.product h3 { margin: 0 0 4px; font-size: 1.25rem; }
+.product .tag { margin: 0; }
+.product p { font-size: 1rem; line-height: 1.55; }
+.product .more { margin-top: auto; align-self: flex-start; min-height: 40px; padding: 0 18px; font-size: .95rem; }
+.product.p-vm .icon { background: #eaf0ff; } .product.p-vm .icon svg { stroke: #2a63e8; }
+.product.p-sites .icon { background: #e6f7f1; } .product.p-sites .icon svg { stroke: #12a37a; }
+.product.p-vox .icon { background: #e4f6fe; } .product.p-vox .icon svg { stroke: #1792c9; }
+.product.p-pdd .icon { background: #f1edff; } .product.p-pdd .icon svg { stroke: #6a4cf2; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
 .card p { color: var(--muted); margin: 0; }
 .icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--tint); margin-bottom: 16px; }
